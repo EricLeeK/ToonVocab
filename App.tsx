@@ -17,7 +17,8 @@ import {
   Volume2,
   Copy,
   ClipboardCopy,
-  Eye
+  Eye,
+  FileText
 } from 'lucide-react';
 
 // Text-to-Speech helper function
@@ -155,6 +156,7 @@ const App: React.FC = () => {
                     onSelect={handleSelectGroup}
                     onDelete={handleDeleteGroup}
                     onImport={() => setShowImportModal(true)}
+                    onArticlePicker={() => setView('ARTICLE_PICKER')}
                   />
                 )}
 
@@ -205,6 +207,10 @@ const App: React.FC = () => {
                     }}
                     onExit={() => setView('STUDY')}
                   />
+                )}
+
+                {view === 'ARTICLE_PICKER' && (
+                  <ArticlePickerView />
                 )}
               </>
             )}
@@ -340,11 +346,13 @@ const HomeView: React.FC<{
   onSelect: (g: WordGroup) => void;
   onDelete: (e: React.MouseEvent, id: string) => void;
   onImport: () => void;
-}> = ({ groups, onCreate, onSelect, onDelete, onImport }) => (
+  onArticlePicker: () => void;
+}> = ({ groups, onCreate, onSelect, onDelete, onImport, onArticlePicker }) => (
   <div className="space-y-6">
     <div className="flex justify-between items-end flex-wrap gap-2">
       <p className="text-xl font-bold text-gray-500">My Daily Words</p>
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap">
+        <Button variant="secondary" onClick={onArticlePicker} icon={<FileText size={20} />}>Article Picker</Button>
         <Button variant="secondary" onClick={onImport} icon={<Download size={20} />}>Import JSON</Button>
         <Button onClick={onCreate} icon={<Plus size={24} />}>New Day</Button>
       </div>
@@ -861,6 +869,190 @@ const ReviewView: React.FC<{
           />
           <Button type="submit" className="w-full py-4 text-xl">Next</Button>
         </form>
+      </div>
+    </div>
+  );
+};
+
+// Article Picker View Component
+const ArticlePickerView: React.FC = () => {
+  const [articleText, setArticleText] = useState('');
+  const [mode, setMode] = useState<'input' | 'picking'>('input');
+  const [tokens, setTokens] = useState<string[]>([]);
+  const [selectedWords, setSelectedWords] = useState<Set<string>>(new Set());
+
+  // Tokenize text into words, punctuation, newlines, and whitespace
+  const tokenize = (text: string): string[] => {
+    // Split by newlines first, then by words and punctuation
+    return text.split(/(\n|\s+|[.,!?;:'"()\[\]{}—–\-]+)/g).filter(Boolean);
+  };
+
+  // Check if a token is a newline
+  const isNewline = (token: string): boolean => {
+    return token === '\n';
+  };
+
+  // Check if a token is a word (contains letters)
+  const isWord = (token: string): boolean => {
+    return /[a-zA-Z]/.test(token);
+  };
+
+  // Normalize word for comparison (lowercase, trim)
+  const normalizeWord = (word: string): string => {
+    return word.toLowerCase().replace(/[^a-zA-Z]/g, '');
+  };
+
+  const handleStartPicking = () => {
+    if (!articleText.trim()) {
+      alert('Please paste an article first!');
+      return;
+    }
+    const tokenized = tokenize(articleText);
+    setTokens(tokenized);
+    setSelectedWords(new Set());
+    setMode('picking');
+  };
+
+  const handleWordClick = (word: string) => {
+    const normalized = normalizeWord(word);
+    if (!normalized) return;
+
+    setSelectedWords(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(normalized)) {
+        newSet.delete(normalized);
+      } else {
+        newSet.add(normalized);
+      }
+      return newSet;
+    });
+  };
+
+  const handleExportJson = () => {
+    const wordsArray = Array.from(selectedWords).sort();
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      words: wordsArray
+    };
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `selected-words-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleReset = () => {
+    setMode('input');
+    setTokens([]);
+    setSelectedWords(new Set());
+  };
+
+  if (mode === 'input') {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h2 className="text-2xl font-black">📝 Article Word Picker</h2>
+        </div>
+
+        <div className="bg-white border-4 border-black rounded-3xl p-6 shadow-comic">
+          <p className="text-gray-600 mb-4 font-bold">
+            Paste an English article below. You can then click on words to select them and export the selected words as JSON.
+          </p>
+
+          <textarea
+            value={articleText}
+            onChange={(e) => setArticleText(e.target.value)}
+            placeholder="Paste your English article here..."
+            className="w-full h-64 p-4 border-2 border-black rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-toon-pink text-lg"
+          />
+
+          <div className="flex justify-end mt-4">
+            <Button
+              onClick={handleStartPicking}
+              disabled={!articleText.trim()}
+              icon={<PlayCircle size={20} />}
+            >
+              Start Picking
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center flex-wrap gap-2">
+        <div>
+          <h2 className="text-2xl font-black">📝 Article Word Picker</h2>
+          <p className="text-gray-500 font-bold">
+            Click on words to select/deselect. Selected: <span className="text-toon-pink">{selectedWords.size}</span> words
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={handleReset} icon={<RefreshCw size={20} />}>
+            Reset
+          </Button>
+          <Button
+            onClick={handleExportJson}
+            disabled={selectedWords.size === 0}
+            icon={<Download size={20} />}
+          >
+            Export JSON
+          </Button>
+        </div>
+      </div>
+
+      <div className="bg-white border-4 border-black rounded-3xl p-6 shadow-comic">
+        <div className="text-lg leading-relaxed">
+          {tokens.map((token, index) => {
+            // Handle newlines as <br> elements
+            if (isNewline(token)) {
+              return <br key={index} />;
+            }
+
+            if (!isWord(token)) {
+              // Render whitespace and punctuation as-is, preserving spaces
+              return <span key={index} style={{ whiteSpace: 'pre' }}>{token}</span>;
+            }
+
+            const normalized = normalizeWord(token);
+            const isSelected = selectedWords.has(normalized);
+
+            return (
+              <span
+                key={index}
+                onClick={() => handleWordClick(token)}
+                className={`
+                  cursor-pointer rounded px-0.5 transition-all duration-150
+                  ${isSelected
+                    ? 'bg-toon-pink text-white font-bold border-2 border-black shadow-sm'
+                    : 'hover:bg-toon-yellow/50'
+                  }
+                `}
+              >
+                {token}
+              </span>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Export button at the bottom */}
+      <div className="flex justify-center">
+        <Button
+          onClick={handleExportJson}
+          disabled={selectedWords.size === 0}
+          className="text-xl px-8 py-4"
+          icon={<Download size={24} />}
+        >
+          Export {selectedWords.size} Words as JSON
+        </Button>
       </div>
     </div>
   );

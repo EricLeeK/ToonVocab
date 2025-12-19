@@ -18,4 +18,4 @@ export interface WordGroup {
   passed?: boolean;
 }
 
-export type ViewState = 'HOME' | 'CREATE' | 'STUDY' | 'REVIEW';
+export type ViewState = 'HOME' | 'CREATE' | 'STUDY' | 'REVIEW' | 'ARTICLE_PICKER';

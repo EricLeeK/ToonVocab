@@ -28,6 +28,10 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': path.resolve(__dirname, '.'),
       }
+    },
+    // WASM support for @jsquash/avif
+    optimizeDeps: {
+      exclude: ['@jsquash/avif']
     }
   };
 });

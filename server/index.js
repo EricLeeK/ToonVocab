@@ -135,11 +135,29 @@ app.put('/api/groups/:id', (req, res) => {
             finalImageUrl = req.body.imageUrl;
         }
 
+        // Handle imageUrls array (for compressed images)
+        let finalImageUrls = existing.imageUrls || [];
+        if (req.body.imageUrls && Array.isArray(req.body.imageUrls)) {
+            // Delete old image files
+            if (existing.imageUrls && Array.isArray(existing.imageUrls)) {
+                existing.imageUrls.forEach(url => deleteImageFile(url));
+            }
+
+            // Convert base64 images to files
+            finalImageUrls = req.body.imageUrls.map((imgUrl, idx) => {
+                if (imgUrl && imgUrl.startsWith('data:image/')) {
+                    return saveBase64Image(imgUrl, `${req.params.id}_img${idx}`);
+                }
+                return imgUrl;
+            });
+        }
+
         const updated = {
             ...existing,
             ...req.body,
             id: req.params.id, // Ensure ID doesn't change
-            imageUrl: finalImageUrl
+            imageUrl: finalImageUrl,
+            imageUrls: finalImageUrls
         };
 
         saveGroup(updated);

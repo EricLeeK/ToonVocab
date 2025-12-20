@@ -265,6 +265,95 @@
         "meaningJp": "領域",
         "meaningJpReading": "りょういき"
       }
+    ],
+    "imageUrls": []
+  },
+  {
+    "id": "w0kvavdn1",
+    "title": "Demo Group",
+    "createdAt": 1766251157338,
+    "passed": false,
+    "words": [
+      {
+        "id": "j0x76wrb1",
+        "term": "apple",
+        "meaningCn": "苹果",
+        "meaningEn": "a round fruit with red or green skin and a whitish interior",
+        "meaningJp": "林檎",
+        "meaningJpReading": "りんご"
+      },
+      {
+        "id": "ljgo44ktq",
+        "term": "banana",
+        "meaningCn": "香蕉",
+        "meaningEn": "a long curved fruit with a yellow skin and soft sweet flesh",
+        "meaningJp": "バナナ",
+        "meaningJpReading": "ばなな"
+      },
+      {
+        "id": "zz4cagzem",
+        "term": "computer",
+        "meaningCn": "电脑",
+        "meaningEn": "an electronic device for storing and processing data",
+        "meaningJp": "コンピュータ",
+        "meaningJpReading": "こんぴゅーた"
+      },
+      {
+        "id": "bidw5uxn0",
+        "term": "happy",
+        "meaningCn": "快乐",
+        "meaningEn": "feeling or showing pleasure or contentment",
+        "meaningJp": "幸せ",
+        "meaningJpReading": "しあわせ"
+      },
+      {
+        "id": "axdre94fh",
+        "term": "beautiful",
+        "meaningCn": "美丽",
+        "meaningEn": "pleasing the senses or mind aesthetically",
+        "meaningJp": "美しい",
+        "meaningJpReading": "うつくしい"
+      },
+      {
+        "id": "g435c628x",
+        "term": "ambitious",
+        "meaningCn": "雄心勃勃",
+        "meaningEn": "having or showing a strong desire and determination to succeed",
+        "meaningJp": "野心的",
+        "meaningJpReading": "やしんてき"
+      },
+      {
+        "id": "cjg0uk7ig",
+        "term": "controversial",
+        "meaningCn": "有争议的",
+        "meaningEn": "giving rise or likely to give rise to controversy or public disagreement",
+        "meaningJp": "論争の的",
+        "meaningJpReading": "ろんそうのまと"
+      },
+      {
+        "id": "at7tt6yvm",
+        "term": "diligent",
+        "meaningCn": "勤奋的",
+        "meaningEn": "showing care and conscientiousness in one's work or duties",
+        "meaningJp": "勤勉な",
+        "meaningJpReading": "きんべんな"
+      },
+      {
+        "id": "o1edxfhvj",
+        "term": "extravagant",
+        "meaningCn": "奢侈的",
+        "meaningEn": "lacking restraint in spending money or using resources",
+        "meaningJp": "贅沢な",
+        "meaningJpReading": "ぜいたくな"
+      },
+      {
+        "id": "the7iiifc",
+        "term": "flourish",
+        "meaningCn": "繁荣",
+        "meaningEn": "to grow or develop in a healthy or vigorous way",
+        "meaningJp": "繁栄する",
+        "meaningJpReading": "はんえいする"
+      }
     ]
   }
 ]

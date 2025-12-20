@@ -1,0 +1,5 @@
+{
+  "name": "Word Factory Alpha",
+  "description": "An AI-powered vocabulary learning tool that groups words, fills gaps with IELTS vocabulary, provides structured translations, and generates mnemonic illustrations.",
+  "requestFramePermissions": []
+}

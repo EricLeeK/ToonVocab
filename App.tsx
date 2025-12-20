@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { WordGroup, Word, ViewState } from './types';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { WordGroup, Word, ViewState, AISettings, WordFactoryGroup, WordFactoryItem, WordFactoryStatus } from './types';
 import * as wordService from './services/wordService';
+import * as aiService from './services/aiService';
+import * as imageService from './services/imageService';
 import { Button } from './components/Button';
 import { Input } from './components/Input';
 import {
@@ -19,7 +21,10 @@ import {
   ClipboardCopy,
   Eye,
   FileText,
-  Wrench
+  Wrench,
+  Factory,
+  Settings,
+  Minimize2
 } from 'lucide-react';
 
 // Text-to-Speech helper function
@@ -192,6 +197,27 @@ const App: React.FC = () => {
                       const updated = groups.find(g => g.id === activeGroup.id);
                       if (updated) setActiveGroup(updated);
                     }}
+                    onCompressAllImages={async (compressedMain, compressedUrls) => {
+                      // Update main image if it was compressed
+                      if (compressedMain) {
+                        await wordService.updateGroupImage(activeGroup.id, compressedMain);
+                      }
+                      // Update imageUrls array if any were compressed
+                      if (compressedUrls && compressedUrls.length > 0) {
+                        // Need to save the whole group with updated imageUrls
+                        const groups = await wordService.getGroups();
+                        const currentGroup = groups.find(g => g.id === activeGroup.id);
+                        if (currentGroup) {
+                          const updated = { ...currentGroup, imageUrls: compressedUrls };
+                          if (compressedMain) updated.imageUrl = compressedMain;
+                          await wordService.saveGroup(updated);
+                        }
+                      }
+                      // Refresh
+                      const groups = await wordService.getGroups();
+                      const updated = groups.find(g => g.id === activeGroup.id);
+                      if (updated) setActiveGroup(updated);
+                    }}
                   />
                 )}
 
@@ -216,6 +242,21 @@ const App: React.FC = () => {
 
                 {view === 'ARTICLE_PICKER' && (
                   <ArticlePickerView />
+                )}
+
+                {view === 'WORD_FACTORY' && (
+                  <WordFactoryView
+                    onOpenSettings={() => setView('WORD_FACTORY_SETTINGS')}
+                    homeGroups={groups}
+                    onAddToHome={async (groupData) => {
+                      await wordService.saveGroup(groupData);
+                      await refreshGroups();
+                    }}
+                  />
+                )}
+
+                {view === 'WORD_FACTORY_SETTINGS' && (
+                  <WordFactorySettingsView onBack={() => setView('WORD_FACTORY')} />
                 )}
               </>
             )}
@@ -491,11 +532,63 @@ const StudyView: React.FC<{
   onImageUpdate: (base64: string) => void;
   onAddImage: (base64: string) => Promise<void>;
   onDeleteImage: (index: number) => Promise<void>;
-}> = ({ group, onEdit, onStartReview, onImageUpdate, onAddImage, onDeleteImage }) => {
+  onCompressAllImages: (compressedMain: string | null, compressedUrls: string[]) => Promise<void>;
+}> = ({ group, onEdit, onStartReview, onImageUpdate, onAddImage, onDeleteImage, onCompressAllImages }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const visualFileInputRef = useRef<HTMLInputElement>(null);
   const [showImages, setShowImages] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [compressing, setCompressing] = useState(false);
+
+  // Compress ALL images in the group (main image + imageUrls)
+  const handleCompressAllImages = async () => {
+    const allImages = group.imageUrls || [];
+    const hasMainImage = !!group.imageUrl;
+    const totalImages = (hasMainImage ? 1 : 0) + allImages.length;
+
+    if (totalImages === 0) {
+      alert('没有可压缩的图片');
+      return;
+    }
+
+    setCompressing(true);
+    try {
+      let totalOriginalSize = 0;
+      let totalCompressedSize = 0;
+
+      // Compress main image
+      let compressedMain: string | null = null;
+      if (group.imageUrl) {
+        const originalSize = imageService.getDataUrlSize(group.imageUrl);
+        totalOriginalSize += originalSize;
+        compressedMain = await imageService.compressImage(group.imageUrl);
+        const compressedSize = imageService.getDataUrlSize(compressedMain);
+        totalCompressedSize += compressedSize;
+      }
+
+      // Compress all imageUrls
+      const compressedUrls: string[] = [];
+      for (const imgUrl of allImages) {
+        const originalSize = imageService.getDataUrlSize(imgUrl);
+        totalOriginalSize += originalSize;
+        const compressed = await imageService.compressImage(imgUrl);
+        const compressedSize = imageService.getDataUrlSize(compressed);
+        totalCompressedSize += compressedSize;
+        compressedUrls.push(compressed);
+      }
+
+      // Save all compressed images
+      await onCompressAllImages(compressedMain, compressedUrls);
+
+      const savedPercent = Math.round((1 - totalCompressedSize / totalOriginalSize) * 100);
+      alert(`压缩完成！\n共 ${totalImages} 张图片\n格式: AVIF\n原始: ${imageService.formatBytes(totalOriginalSize)}\n压缩后: ${imageService.formatBytes(totalCompressedSize)}\n减少: ${savedPercent}%`);
+    } catch (err) {
+      console.error('Compression failed:', err);
+      alert('压缩失败，请重试');
+    } finally {
+      setCompressing(false);
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -601,6 +694,23 @@ const StudyView: React.FC<{
               title="Copy image to clipboard"
             >
               <ClipboardCopy size={16} /> Copy Image
+            </button>
+          )}
+          {(group.imageUrl || (group.imageUrls && group.imageUrls.length > 0)) && (
+            <button
+              onClick={handleCompressAllImages}
+              disabled={compressing}
+              className={`flex items-center gap-1 px-3 py-2 rounded-xl border-2 border-black text-sm font-bold transition-colors ${compressing
+                ? 'bg-gray-300 cursor-wait'
+                : 'bg-toon-blue hover:bg-blue-300'
+                }`}
+              title="一键压缩所有图片为AVIF格式"
+            >
+              {compressing ? (
+                <><RefreshCw size={16} className="animate-spin" /> 压缩中...</>
+              ) : (
+                <><Minimize2 size={16} /> 压缩全部图片</>
+              )}
             </button>
           )}
           <Button variant="secondary" onClick={onEdit} icon={<BookOpen size={20} />}>Edit</Button>
@@ -892,14 +1002,13 @@ const ToolboxView: React.FC<{
       icon: <FileText size={40} />,
       color: 'bg-toon-pink'
     },
-    // Add more tools here in the future
-    // {
-    //   id: 'TOOL_ID',
-    //   name: 'Tool Name',
-    //   description: 'Tool description',
-    //   icon: <IconComponent size={40} />,
-    //   color: 'bg-toon-blue'
-    // },
+    {
+      id: 'WORD_FACTORY',
+      name: '单词加工厂',
+      description: 'AI翻译+可视化',
+      icon: <Factory size={40} />,
+      color: 'bg-toon-blue'
+    },
   ];
 
   return (
@@ -947,32 +1056,284 @@ const ToolboxView: React.FC<{
   );
 };
 
+// Token info for tracking position
+interface TokenInfo {
+  text: string;
+  index: number;
+  isWord: boolean;
+  isNewline: boolean;
+}
+
+// Word meaning from dictionary API
+interface WordMeaning {
+  word: string;
+  phonetic?: string;
+  definitions: string[];
+  loading: boolean;
+  error?: string;
+}
+
+// Floating Panel Component
+const FloatingMeaningPanel: React.FC<{
+  selectedItems: string[];
+  phrases: string[];
+  meanings: Map<string, WordMeaning>;
+  onFetchMeaning: (word: string) => void;
+}> = ({ selectedItems, phrases, meanings, onFetchMeaning }) => {
+  const [position, setPosition] = useState({ x: 20, y: 20 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [isMinimized, setIsMinimized] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('.panel-content')) return;
+    setIsDragging(true);
+    setDragOffset({
+      x: e.clientX - position.x,
+      y: e.clientY - position.y
+    });
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return;
+      setPosition({
+        x: e.clientX - dragOffset.x,
+        y: e.clientY - dragOffset.y
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, dragOffset]);
+
+  // Fetch meanings for new words
+  useEffect(() => {
+    selectedItems.forEach(word => {
+      if (!meanings.has(word)) {
+        onFetchMeaning(word);
+      }
+    });
+  }, [selectedItems, meanings, onFetchMeaning]);
+
+  const allItems = [...selectedItems, ...phrases];
+
+  if (allItems.length === 0) return null;
+
+  return (
+    <div
+      ref={panelRef}
+      className="fixed z-50 bg-white border-4 border-black rounded-2xl shadow-comic overflow-hidden"
+      style={{
+        left: position.x,
+        top: position.y,
+        width: isMinimized ? 200 : 320,
+        cursor: isDragging ? 'grabbing' : 'grab',
+        userSelect: 'none'
+      }}
+      onMouseDown={handleMouseDown}
+    >
+      {/* Header */}
+      <div className="bg-toon-blue px-4 py-2 flex justify-between items-center border-b-4 border-black">
+        <span className="font-black text-sm">📖 Word Meanings ({allItems.length})</span>
+        <button
+          onClick={() => setIsMinimized(!isMinimized)}
+          className="w-6 h-6 bg-white rounded-full border-2 border-black flex items-center justify-center hover:bg-gray-100"
+        >
+          {isMinimized ? '+' : '−'}
+        </button>
+      </div>
+
+      {/* Content */}
+      {!isMinimized && (
+        <div className="panel-content max-h-[400px] overflow-y-auto p-3 space-y-3" style={{ cursor: 'default' }}>
+          {/* Phrases Section */}
+          {phrases.length > 0 && (
+            <div className="mb-4">
+              <div className="text-xs font-bold text-purple-600 mb-2">📚 PHRASES</div>
+              {phrases.map((phrase, idx) => (
+                <div key={`phrase-${idx}`} className="bg-purple-100 p-2 rounded-lg mb-2 border-2 border-purple-300">
+                  <span className="font-bold text-purple-800">{phrase}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Words Section */}
+          {selectedItems.length > 0 && (
+            <div>
+              <div className="text-xs font-bold text-pink-600 mb-2">📝 WORDS</div>
+              {selectedItems.map((word, idx) => {
+                const meaning = meanings.get(word);
+                return (
+                  <div key={`word-${idx}`} className="bg-pink-50 p-2 rounded-lg mb-2 border-2 border-pink-200">
+                    <div className="font-bold text-pink-800 flex items-center gap-2">
+                      {word}
+                      {meaning?.phonetic && (
+                        <span className="text-xs font-normal text-gray-500">{meaning.phonetic}</span>
+                      )}
+                    </div>
+                    {meaning?.loading && (
+                      <div className="text-xs text-gray-400 italic">Loading...</div>
+                    )}
+                    {meaning?.error && (
+                      <div className="text-xs text-red-400">{meaning.error}</div>
+                    )}
+                    {meaning?.definitions && meaning.definitions.length > 0 && (
+                      <div className="text-xs text-gray-600 mt-1">
+                        {meaning.definitions.slice(0, 2).map((def, i) => (
+                          <div key={i} className="mb-1">• {def}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Article Picker View Component
 const ArticlePickerView: React.FC = () => {
   const [articleText, setArticleText] = useState('');
   const [mode, setMode] = useState<'input' | 'picking'>('input');
-  const [tokens, setTokens] = useState<string[]>([]);
-  const [selectedWords, setSelectedWords] = useState<Set<string>>(new Set());
+  const [tokens, setTokens] = useState<TokenInfo[]>([]);
+  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [phrases, setPhrases] = useState<number[][]>([]); // Arrays of token indices forming phrases
+  const [hoveredConnector, setHoveredConnector] = useState<number | null>(null);
+  const [wordMeanings, setWordMeanings] = useState<Map<string, WordMeaning>>(new Map());
 
   // Tokenize text into words, punctuation, newlines, and whitespace
-  const tokenize = (text: string): string[] => {
-    // Split by newlines first, then by words and punctuation
-    return text.split(/(\n|\s+|[.,!?;:'"()\[\]{}—–\-]+)/g).filter(Boolean);
-  };
-
-  // Check if a token is a newline
-  const isNewline = (token: string): boolean => {
-    return token === '\n';
-  };
-
-  // Check if a token is a word (contains letters)
-  const isWord = (token: string): boolean => {
-    return /[a-zA-Z]/.test(token);
+  const tokenize = (text: string): TokenInfo[] => {
+    const rawTokens = text.split(/(\n|\s+|[.,!?;:'"()\[\]{}—–\-]+)/g).filter(Boolean);
+    return rawTokens.map((token, index) => ({
+      text: token,
+      index,
+      isWord: /[a-zA-Z]/.test(token),
+      isNewline: token === '\n'
+    }));
   };
 
   // Normalize word for comparison (lowercase, trim)
   const normalizeWord = (word: string): string => {
     return word.toLowerCase().replace(/[^a-zA-Z]/g, '');
+  };
+
+  // Check if a token index is part of a phrase
+  const getPhraseForIndex = (index: number): number[] | null => {
+    return phrases.find(phrase => phrase.includes(index)) || null;
+  };
+
+  // Get the display text for a phrase
+  const getPhraseText = (phraseIndices: number[]): string => {
+    return phraseIndices.map(i => tokens[i]?.text || '').join(' ');
+  };
+
+  // Find adjacent selected word indices (for showing connectors)
+  const findAdjacentPairs = (): [number, number][] => {
+    const pairs: [number, number][] = [];
+    const wordTokens = tokens.filter(t => t.isWord);
+
+    for (let i = 0; i < wordTokens.length - 1; i++) {
+      const current = wordTokens[i];
+      const next = wordTokens[i + 1];
+
+      // Check if both are selected and not already in the same phrase
+      if (selectedIndices.has(current.index) && selectedIndices.has(next.index)) {
+        const currentPhrase = getPhraseForIndex(current.index);
+        const nextPhrase = getPhraseForIndex(next.index);
+
+        // Only show connector if they're not in the same phrase
+        if (!currentPhrase || !nextPhrase || currentPhrase !== nextPhrase) {
+          pairs.push([current.index, next.index]);
+        }
+      }
+    }
+    return pairs;
+  };
+
+  // Merge two adjacent words/phrases into a phrase
+  const handleMerge = (index1: number, index2: number) => {
+    const phrase1 = getPhraseForIndex(index1);
+    const phrase2 = getPhraseForIndex(index2);
+
+    let newPhrase: number[];
+    let newPhrases = phrases.filter(p => p !== phrase1 && p !== phrase2);
+
+    if (phrase1 && phrase2) {
+      // Merge two phrases
+      newPhrase = [...phrase1, ...phrase2].sort((a, b) => a - b);
+    } else if (phrase1) {
+      // Add word to existing phrase
+      newPhrase = [...phrase1, index2].sort((a, b) => a - b);
+    } else if (phrase2) {
+      // Add word to existing phrase
+      newPhrase = [index1, ...phrase2].sort((a, b) => a - b);
+    } else {
+      // Create new phrase from two words
+      newPhrase = [index1, index2].sort((a, b) => a - b);
+    }
+
+    setPhrases([...newPhrases, newPhrase]);
+    setHoveredConnector(null);
+  };
+
+  // Fetch word meaning from Free Dictionary API
+  const fetchMeaning = async (word: string) => {
+    const normalized = normalizeWord(word);
+    if (!normalized || wordMeanings.has(normalized)) return;
+
+    setWordMeanings(prev => new Map(prev).set(normalized, {
+      word: normalized,
+      definitions: [],
+      loading: true
+    }));
+
+    try {
+      const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${normalized}`);
+      if (!response.ok) throw new Error('Not found');
+
+      const data = await response.json();
+      const meanings = data[0]?.meanings || [];
+      const definitions: string[] = [];
+      const phonetic = data[0]?.phonetic || data[0]?.phonetics?.[0]?.text;
+
+      meanings.forEach((m: any) => {
+        m.definitions?.slice(0, 2).forEach((d: any) => {
+          if (d.definition) definitions.push(d.definition);
+        });
+      });
+
+      setWordMeanings(prev => new Map(prev).set(normalized, {
+        word: normalized,
+        phonetic,
+        definitions: definitions.slice(0, 3),
+        loading: false
+      }));
+    } catch {
+      setWordMeanings(prev => new Map(prev).set(normalized, {
+        word: normalized,
+        definitions: [],
+        loading: false,
+        error: 'No definition found'
+      }));
+    }
   };
 
   const handleStartPicking = () => {
@@ -982,30 +1343,55 @@ const ArticlePickerView: React.FC = () => {
     }
     const tokenized = tokenize(articleText);
     setTokens(tokenized);
-    setSelectedWords(new Set());
+    setSelectedIndices(new Set());
+    setPhrases([]);
+    setWordMeanings(new Map());
     setMode('picking');
   };
 
-  const handleWordClick = (word: string) => {
-    const normalized = normalizeWord(word);
-    if (!normalized) return;
+  const handleWordClick = (tokenIndex: number) => {
+    const token = tokens[tokenIndex];
+    if (!token || !token.isWord) return;
 
-    setSelectedWords(prev => {
+    // Check if part of a phrase
+    const phrase = getPhraseForIndex(tokenIndex);
+
+    setSelectedIndices(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(normalized)) {
-        newSet.delete(normalized);
+      if (phrase) {
+        // Deselect entire phrase
+        phrase.forEach(i => newSet.delete(i));
+        setPhrases(phrases.filter(p => p !== phrase));
+      } else if (newSet.has(tokenIndex)) {
+        newSet.delete(tokenIndex);
       } else {
-        newSet.add(normalized);
+        newSet.add(tokenIndex);
       }
       return newSet;
     });
   };
 
   const handleExportJson = () => {
-    const wordsArray = Array.from(selectedWords).sort();
+    // Collect single words
+    const singleWords: string[] = [];
+    const phraseTexts: string[] = [];
+
+    selectedIndices.forEach(idx => {
+      const phrase = getPhraseForIndex(idx);
+      if (!phrase) {
+        singleWords.push(normalizeWord(tokens[idx].text));
+      }
+    });
+
+    // Collect phrases
+    phrases.forEach(phraseIndices => {
+      phraseTexts.push(getPhraseText(phraseIndices));
+    });
+
     const exportData = {
       exportedAt: new Date().toISOString(),
-      words: wordsArray
+      words: [...new Set(singleWords)].sort(),
+      phrases: phraseTexts
     };
 
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
@@ -1022,8 +1408,28 @@ const ArticlePickerView: React.FC = () => {
   const handleReset = () => {
     setMode('input');
     setTokens([]);
-    setSelectedWords(new Set());
+    setSelectedIndices(new Set());
+    setPhrases([]);
+    setWordMeanings(new Map());
   };
+
+  // Get selected words for the floating panel
+  const getSelectedWords = (): string[] => {
+    const words: string[] = [];
+    selectedIndices.forEach(idx => {
+      if (!getPhraseForIndex(idx)) {
+        words.push(normalizeWord(tokens[idx].text));
+      }
+    });
+    return [...new Set(words)];
+  };
+
+  // Get phrase texts for floating panel
+  const getPhraseTexts = (): string[] => {
+    return phrases.map(p => getPhraseText(p));
+  };
+
+  const adjacentPairs = mode === 'picking' ? findAdjacentPairs() : [];
 
   if (mode === 'input') {
     return (
@@ -1064,7 +1470,8 @@ const ArticlePickerView: React.FC = () => {
         <div>
           <h2 className="text-2xl font-black">📝 Article Word Picker</h2>
           <p className="text-gray-500 font-bold">
-            Click on words to select/deselect. Selected: <span className="text-toon-pink">{selectedWords.size}</span> words
+            Click on words to select/deselect. Selected: <span className="text-toon-pink">{selectedIndices.size}</span> words
+            {phrases.length > 0 && <span className="text-purple-600 ml-2">({phrases.length} phrases)</span>}
           </p>
         </div>
         <div className="flex gap-2">
@@ -1073,7 +1480,7 @@ const ArticlePickerView: React.FC = () => {
           </Button>
           <Button
             onClick={handleExportJson}
-            disabled={selectedWords.size === 0}
+            disabled={selectedIndices.size === 0}
             icon={<Download size={20} />}
           >
             Export JSON
@@ -1082,51 +1489,702 @@ const ArticlePickerView: React.FC = () => {
       </div>
 
       <div className="bg-white border-4 border-black rounded-3xl p-6 shadow-comic">
-        <div className="text-lg leading-relaxed">
+        <div className="text-lg leading-relaxed" style={{ fontFamily: "'Times New Roman', serif" }}>
           {tokens.map((token, index) => {
             // Handle newlines as <br> elements
-            if (isNewline(token)) {
+            if (token.isNewline) {
               return <br key={index} />;
             }
 
-            if (!isWord(token)) {
+            if (!token.isWord) {
+              // Check if this is between two adjacent selected words - show connector
+              const isConnectorPosition = adjacentPairs.some(([i1, i2]) => {
+                // Check if this token is between i1 and i2
+                return index > i1 && index < i2;
+              });
+
+              if (isConnectorPosition && selectedIndices.size > 0) {
+                const pair = adjacentPairs.find(([i1, i2]) => index > i1 && index < i2);
+                if (pair) {
+                  return (
+                    <span key={index} className="relative inline">
+                      <span style={{ whiteSpace: 'pre' }}>{token.text}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleMerge(pair[0], pair[1]);
+                        }}
+                        onMouseEnter={() => setHoveredConnector(index)}
+                        onMouseLeave={() => setHoveredConnector(null)}
+                        className={`
+                          absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2
+                          w-5 h-5 rounded-full flex items-center justify-center
+                          text-xs font-bold transition-all duration-150
+                          ${hoveredConnector === index
+                            ? 'bg-purple-500 text-white scale-125 shadow-lg'
+                            : 'bg-purple-200 text-purple-700 opacity-60 hover:opacity-100'}
+                        `}
+                        title="Click to merge into phrase"
+                      >
+                        ⊕
+                      </button>
+                    </span>
+                  );
+                }
+              }
+
               // Render whitespace and punctuation as-is, preserving spaces
-              return <span key={index} style={{ whiteSpace: 'pre' }}>{token}</span>;
+              return <span key={index} style={{ whiteSpace: 'pre' }}>{token.text}</span>;
             }
 
-            const normalized = normalizeWord(token);
-            const isSelected = selectedWords.has(normalized);
+            const isSelected = selectedIndices.has(index);
+            const phrase = getPhraseForIndex(index);
+            const isPhrase = phrase !== null;
 
             return (
               <span
                 key={index}
-                onClick={() => handleWordClick(token)}
+                onClick={() => handleWordClick(index)}
+                style={isSelected ? { fontFamily: 'inherit' } : undefined}
                 className={`
                   cursor-pointer rounded px-0.5 transition-all duration-150
-                  ${isSelected
-                    ? 'bg-toon-pink text-white font-bold border-2 border-black shadow-sm'
-                    : 'hover:bg-toon-yellow/50'
+                  ${isPhrase
+                    ? 'bg-purple-400 text-white font-bold border-2 border-purple-600 shadow-sm'
+                    : isSelected
+                      ? 'bg-toon-pink text-white font-bold border-2 border-black shadow-sm'
+                      : 'hover:bg-toon-yellow/50'
                   }
                 `}
               >
-                {token}
+                {token.text}
               </span>
             );
           })}
         </div>
       </div>
 
+      {/* Floating Meaning Panel */}
+      <FloatingMeaningPanel
+        selectedItems={getSelectedWords()}
+        phrases={getPhraseTexts()}
+        meanings={wordMeanings}
+        onFetchMeaning={fetchMeaning}
+      />
+
       {/* Export button at the bottom */}
       <div className="flex justify-center">
         <Button
           onClick={handleExportJson}
-          disabled={selectedWords.size === 0}
+          disabled={selectedIndices.size === 0}
           className="text-xl px-8 py-4"
           icon={<Download size={24} />}
         >
-          Export {selectedWords.size} Words as JSON
+          Export {selectedIndices.size} Words as JSON
         </Button>
       </div>
+    </div>
+  );
+};
+
+// Word Factory Settings View Component
+const WordFactorySettingsView: React.FC<{
+  onBack: () => void;
+}> = ({ onBack }) => {
+  const [settings, setSettings] = useState<AISettings>(() => aiService.loadAISettings());
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = () => {
+    aiService.saveAISettings(settings);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleProviderChange = (provider: AISettings['selectedProvider']) => {
+    setSettings({ ...settings, selectedProvider: provider });
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-black flex items-center gap-3">
+          <Settings size={28} />
+          设置 - 单词加工厂
+        </h2>
+        <Button variant="secondary" onClick={onBack} icon={<ArrowLeft size={20} />}>
+          返回
+        </Button>
+      </div>
+
+      <div className="bg-white border-4 border-black rounded-3xl p-6 shadow-comic space-y-6">
+        {/* Provider Selection */}
+        <div>
+          <label className="font-bold text-lg mb-3 block">选择 AI 服务商</label>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {(['gemini', 'deepseek', 'siliconflow'] as const).map((provider) => (
+              <button
+                key={provider}
+                onClick={() => handleProviderChange(provider)}
+                className={`
+                  p-4 rounded-xl border-2 transition-all text-left
+                  ${settings.selectedProvider === provider
+                    ? 'border-black bg-toon-yellow shadow-comic'
+                    : 'border-gray-300 bg-white hover:border-gray-400'}
+                `}
+              >
+                <div className="font-bold">{aiService.PROVIDER_DISPLAY_NAMES[provider]}</div>
+                <div className="text-sm text-gray-500">
+                  {provider === 'gemini' && 'Google AI'}
+                  {provider === 'deepseek' && 'DeepSeek AI'}
+                  {provider === 'siliconflow' && '国内服务'}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* API Keys */}
+        <div className="space-y-4">
+          <h3 className="font-bold text-lg">API Keys</h3>
+
+          <div className="space-y-3">
+            <div>
+              <label className="font-bold text-sm block mb-1">
+                Gemini API Key
+                {settings.selectedProvider === 'gemini' && <span className="text-toon-pink ml-2">(当前使用)</span>}
+              </label>
+              <Input
+                type="password"
+                placeholder="输入你的 Gemini API Key"
+                value={settings.geminiApiKey}
+                onChange={(e) => setSettings({ ...settings, geminiApiKey: e.target.value })}
+                className="bg-gray-50"
+              />
+            </div>
+
+            <div>
+              <label className="font-bold text-sm block mb-1">
+                DeepSeek API Key
+                {settings.selectedProvider === 'deepseek' && <span className="text-toon-pink ml-2">(当前使用)</span>}
+              </label>
+              <Input
+                type="password"
+                placeholder="输入你的 DeepSeek API Key"
+                value={settings.deepseekApiKey}
+                onChange={(e) => setSettings({ ...settings, deepseekApiKey: e.target.value })}
+                className="bg-gray-50"
+              />
+            </div>
+
+            <div>
+              <label className="font-bold text-sm block mb-1">
+                硅基流动 API Key
+                {settings.selectedProvider === 'siliconflow' && <span className="text-toon-pink ml-2">(当前使用)</span>}
+              </label>
+              <Input
+                type="password"
+                placeholder="输入你的硅基流动 API Key"
+                value={settings.siliconflowApiKey}
+                onChange={(e) => setSettings({ ...settings, siliconflowApiKey: e.target.value })}
+                className="bg-gray-50"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Save Button */}
+        <div className="flex justify-end">
+          <Button onClick={handleSave} icon={saved ? <Check size={20} /> : undefined}>
+            {saved ? '已保存!' : '保存设置'}
+          </Button>
+        </div>
+      </div>
+
+      {/* Help Section */}
+      <div className="bg-toon-blue/20 border-2 border-toon-blue rounded-xl p-4">
+        <p className="font-bold mb-2">💡 如何获取 API Key？</p>
+        <ul className="text-sm space-y-1 text-gray-700">
+          <li>• <strong>Gemini:</strong> 访问 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="text-blue-600 underline">Google AI Studio</a></li>
+          <li>• <strong>DeepSeek:</strong> 访问 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer" className="text-blue-600 underline">DeepSeek Platform</a></li>
+          <li>• <strong>硅基流动:</strong> 访问 <a href="https://cloud.siliconflow.cn/account/ak" target="_blank" rel="noreferrer" className="text-blue-600 underline">SiliconFlow 控制台</a></li>
+        </ul>
+      </div>
+    </div>
+  );
+};
+
+// Word Factory View Component - Main Tool View
+const WORD_FACTORY_STORAGE_KEY = 'word_factory_session';
+
+interface WordFactorySessionData {
+  inputText: string;
+  status: WordFactoryStatus;
+  rawWords: string[];
+  groups: WordFactoryGroup[];
+  activeGroupId: number | null;
+  addedToHomeMap: [number, string][];
+}
+
+const WordFactoryView: React.FC<{
+  onOpenSettings: () => void;
+  homeGroups: WordGroup[];
+  onAddToHome: (groupData: WordGroup) => Promise<void>;
+}> = ({ onOpenSettings, homeGroups, onAddToHome }) => {
+  // Load initial state from localStorage
+  const loadSavedSession = (): Partial<WordFactorySessionData> | null => {
+    try {
+      const saved = localStorage.getItem(WORD_FACTORY_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error('Failed to load Word Factory session:', e);
+    }
+    return null;
+  };
+
+  const savedSession = loadSavedSession();
+
+  const [inputText, setInputText] = useState(savedSession?.inputText || '');
+  const [status, setStatus] = useState<WordFactoryStatus>(savedSession?.status || WordFactoryStatus.IDLE);
+  const [rawWords, setRawWords] = useState<string[]>(savedSession?.rawWords || []);
+  const [groups, setGroups] = useState<WordFactoryGroup[]>(savedSession?.groups || []);
+  const [activeGroupId, setActiveGroupId] = useState<number | null>(savedSession?.activeGroupId ?? null);
+  const [error, setError] = useState<string>('');
+  const [settings] = useState<AISettings>(() => aiService.loadAISettings());
+  // Track which factory groups have been added to home (by factory group id -> home group id)
+  const [addedToHomeMap, setAddedToHomeMap] = useState<Map<number, string>>(
+    () => new Map(savedSession?.addedToHomeMap || [])
+  );
+
+  // Save session to localStorage when state changes
+  useEffect(() => {
+    if (status !== WordFactoryStatus.IDLE || groups.length > 0) {
+      const sessionData: WordFactorySessionData = {
+        inputText,
+        status,
+        rawWords,
+        groups,
+        activeGroupId,
+        addedToHomeMap: Array.from(addedToHomeMap.entries()),
+      };
+      localStorage.setItem(WORD_FACTORY_STORAGE_KEY, JSON.stringify(sessionData));
+    }
+  }, [inputText, status, rawWords, groups, activeGroupId, addedToHomeMap]);
+
+  const GROUP_SIZE = 10;
+
+  // Process initial input
+  const handleStartProcess = () => {
+    if (!inputText.trim()) {
+      alert('请输入单词列表!');
+      return;
+    }
+
+    // Check API key
+    const apiKey = aiService.getApiKey(settings);
+    if (!apiKey) {
+      alert(`请先在设置中配置 ${aiService.PROVIDER_DISPLAY_NAMES[settings.selectedProvider]} API Key`);
+      onOpenSettings();
+      return;
+    }
+
+    // Split by newlines or commas
+    const words = inputText.split(/[\n,]+/).map(w => w.trim()).filter(w => w.length > 0);
+    if (words.length === 0) {
+      alert('没有检测到有效的单词!');
+      return;
+    }
+
+    setRawWords(words);
+    setError('');
+
+    // Calculate number of groups
+    const totalGroups = Math.ceil(words.length / GROUP_SIZE);
+    const initialGroups: WordFactoryGroup[] = Array.from({ length: totalGroups }, (_, i) => ({
+      id: i,
+      title: `Group ${i + 1}`,
+      words: [],
+      isProcessing: false
+    }));
+
+    setGroups(initialGroups);
+    setActiveGroupId(0);
+    setStatus(WordFactoryStatus.PROCESSING);
+
+    // Process first group
+    processGroup(0, words, initialGroups);
+  };
+
+  // Process a specific group
+  const processGroup = async (groupIndex: number, allWords: string[], currentGroups: WordFactoryGroup[]) => {
+    const group = currentGroups[groupIndex];
+    if (group.words.length > 0) return; // Already processed
+
+    // Mark as processing
+    setGroups(prev => prev.map(g =>
+      g.id === groupIndex ? { ...g, isProcessing: true } : g
+    ));
+
+    // Slice words for this group
+    const startIdx = groupIndex * GROUP_SIZE;
+    const groupWords = allWords.slice(startIdx, startIdx + GROUP_SIZE);
+
+    try {
+      const result = await aiService.processGroupWords(groupWords, groupIndex, settings);
+
+      setGroups(prev => prev.map(g => {
+        if (g.id === groupIndex) {
+          return {
+            ...g,
+            words: result.words,
+            title: result.title,
+            isProcessing: false
+          };
+        }
+        return g;
+      }));
+
+      setStatus(WordFactoryStatus.COMPLETED);
+    } catch (e: any) {
+      console.error('Error processing group:', e);
+      setError(e.message || '处理失败，请重试');
+      setGroups(prev => prev.map(g =>
+        g.id === groupIndex ? { ...g, isProcessing: false } : g
+      ));
+      setStatus(WordFactoryStatus.ERROR);
+    }
+  };
+
+  // Handle group tab click
+  const handleGroupClick = (groupId: number) => {
+    setActiveGroupId(groupId);
+    const group = groups.find(g => g.id === groupId);
+    if (group && group.words.length === 0 && !group.isProcessing) {
+      processGroup(groupId, rawWords, groups);
+    }
+  };
+
+  // Download JSON
+  const handleDownloadJson = () => {
+    if (activeGroupId === null) return;
+    const group = groups.find(g => g.id === activeGroupId);
+    if (!group) return;
+
+    const data = {
+      title: group.title,
+      words: group.words
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${group.title.replace(/\s+/g, '_')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Copy JSON
+  const handleCopyJson = async () => {
+    if (activeGroupId === null) return;
+    const group = groups.find(g => g.id === activeGroupId);
+    if (!group) return;
+
+    const data = {
+      title: group.title,
+      words: group.words
+    };
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      alert('JSON 已复制到剪贴板!');
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
+  // Reset - clears all state and localStorage
+  const handleReset = () => {
+    setStatus(WordFactoryStatus.IDLE);
+    setInputText('');
+    setRawWords([]);
+    setGroups([]);
+    setActiveGroupId(null);
+    setError('');
+    setAddedToHomeMap(new Map());
+    // Clear persisted session
+    localStorage.removeItem(WORD_FACTORY_STORAGE_KEY);
+  };
+
+  // Check if a factory group is still added to home (home group still exists)
+  const isGroupAddedToHome = (factoryGroupId: number): boolean => {
+    const homeGroupId = addedToHomeMap.get(factoryGroupId);
+    if (!homeGroupId) return false;
+    // Check if the home group still exists
+    return homeGroups.some(g => g.id === homeGroupId);
+  };
+
+  // Add current group to home page
+  const handleAddToHome = async () => {
+    if (activeGroupId === null) return;
+    const group = groups.find(g => g.id === activeGroupId);
+    if (!group || group.words.length === 0) return;
+
+    // Prompt for group name
+    const defaultName = group.words[0]?.term || group.title;
+    const inputName = prompt('请输入组名 (留空则使用第一个单词):', defaultName);
+
+    // User cancelled
+    if (inputName === null) return;
+
+    const groupName = inputName.trim() || defaultName;
+
+    // Generate unique ID for home group
+    const homeGroupId = Math.random().toString(36).substr(2, 9);
+
+    // Convert WordFactoryItem[] to Word[]
+    const words: Word[] = group.words.map(w => ({
+      id: Math.random().toString(36).substr(2, 9),
+      term: w.term,
+      meaningCn: w.meaningCn,
+      meaningEn: w.meaningEn,
+      meaningJp: w.meaningJp,
+      meaningJpReading: w.meaningJpReading,
+    }));
+
+    // Create WordGroup with optional images
+    const homeGroupData: WordGroup = {
+      id: homeGroupId,
+      title: groupName,
+      createdAt: Date.now(),
+      words,
+      passed: false,
+      // Add images if they were generated
+      ...(group.images?.part1 && { imageUrl: group.images.part1 }),
+      ...(group.images && (group.images.part1 || group.images.part2) && {
+        imageUrls: [group.images.part1, group.images.part2].filter(Boolean) as string[]
+      }),
+    };
+
+    try {
+      await onAddToHome(homeGroupData);
+      // Track that this factory group was added
+      setAddedToHomeMap(prev => new Map(prev).set(activeGroupId, homeGroupId));
+      alert(`"${groupName}" 已添加到首页!`);
+    } catch (err) {
+      console.error('Failed to add to home:', err);
+      alert('添加失败，请重试');
+    }
+  };
+
+  const activeGroup = groups.find(g => g.id === activeGroupId);
+
+  // Input Mode
+  if (status === WordFactoryStatus.IDLE) {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h2 className="text-2xl font-black flex items-center gap-3">
+            <Factory size={28} />
+            单词加工厂
+          </h2>
+          <button
+            onClick={onOpenSettings}
+            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+            title="设置"
+          >
+            <Settings size={24} />
+          </button>
+        </div>
+
+        <div className="bg-white border-4 border-black rounded-3xl p-6 shadow-comic">
+          <p className="text-gray-600 mb-4 font-bold">
+            输入单词列表，AI 将自动添加中/英/日三语翻译。
+            <br />
+            <span className="text-sm text-gray-400">当前服务商: {aiService.PROVIDER_DISPLAY_NAMES[settings.selectedProvider]}</span>
+          </p>
+
+          <textarea
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            placeholder="输入单词，用逗号或换行分隔...&#10;例如:&#10;apple&#10;banana&#10;computer"
+            className="w-full h-64 p-4 border-2 border-black rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-toon-pink text-lg"
+          />
+
+          <div className="flex justify-end mt-4">
+            <Button
+              onClick={handleStartProcess}
+              disabled={!inputText.trim()}
+              icon={<PlayCircle size={20} />}
+            >
+              开始生产 🏭
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Processing/Result Mode
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-black flex items-center gap-3">
+          <Factory size={28} />
+          单词加工厂
+        </h2>
+        <div className="flex gap-2">
+          <button
+            onClick={onOpenSettings}
+            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+            title="设置"
+          >
+            <Settings size={24} />
+          </button>
+          <Button variant="secondary" onClick={handleReset} icon={<RefreshCw size={20} />}>
+            重新开始
+          </Button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-red-100 border-2 border-red-300 rounded-xl p-4 text-red-700 font-bold">
+          ❌ {error}
+        </div>
+      )}
+
+      {/* Group Tabs */}
+      <div className="flex flex-wrap gap-2">
+        {groups.map((group) => (
+          <button
+            key={group.id}
+            onClick={() => handleGroupClick(group.id)}
+            className={`
+              px-4 py-2 rounded-lg font-bold border-2 border-black transition-all
+              ${activeGroupId === group.id
+                ? 'bg-toon-yellow shadow-comic'
+                : 'bg-white hover:bg-gray-100'}
+              ${group.isProcessing ? 'animate-pulse' : ''}
+            `}
+          >
+            {group.title}
+            {group.isProcessing && ' ⏳'}
+          </button>
+        ))}
+      </div>
+
+      {activeGroup && (
+        <div className="space-y-6">
+          {/* Action Bar */}
+          <div className="flex flex-wrap gap-4 p-4 bg-white rounded-xl border-2 border-black items-center">
+            <div className="inline-flex rounded-md shadow-sm" role="group">
+              <button
+                onClick={handleCopyJson}
+                disabled={activeGroup.words.length === 0}
+                className="px-4 py-2 text-sm font-bold bg-gray-100 border-2 border-black rounded-l-lg hover:bg-gray-200 disabled:opacity-50"
+              >
+                📋 复制
+              </button>
+              <button
+                onClick={handleDownloadJson}
+                disabled={activeGroup.words.length === 0}
+                className="px-4 py-2 text-sm font-bold bg-gray-100 border-t-2 border-b-2 border-r-2 border-black rounded-r-lg hover:bg-gray-200 disabled:opacity-50"
+              >
+                💾 JSON
+              </button>
+            </div>
+
+            {/* Add to Home Button */}
+            <button
+              onClick={handleAddToHome}
+              disabled={activeGroup.words.length === 0 || isGroupAddedToHome(activeGroup.id)}
+              className={`
+                px-4 py-2 rounded-lg font-bold border-2 transition-all
+                ${isGroupAddedToHome(activeGroup.id)
+                  ? 'border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed'
+                  : 'border-black bg-toon-green hover:bg-green-400 shadow-comic active:translate-y-0.5 active:shadow-none'}
+              `}
+              title={isGroupAddedToHome(activeGroup.id) ? '已添加到首页' : '添加到首页'}
+            >
+              {isGroupAddedToHome(activeGroup.id) ? '✅ 已添加' : '📥 添加到首页'}
+            </button>
+
+            <div className="flex-1" />
+
+            {/* Image generation placeholder */}
+            <button
+              disabled
+              className="px-4 py-2 rounded-lg font-bold border-2 border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed"
+              title="图片生成功能即将推出"
+            >
+              ✨ 生成图片 (即将推出)
+            </button>
+          </div>
+
+          {/* Word List */}
+          <div>
+            <h3 className="text-xl font-black mb-4">{activeGroup.title}</h3>
+            {activeGroup.isProcessing ? (
+              <div className="p-12 text-center text-gray-500 font-bold bg-white/50 rounded-xl border-2 border-dashed border-gray-300">
+                <RefreshCw size={32} className="animate-spin mx-auto mb-4" />
+                正在用 AI 处理单词...
+              </div>
+            ) : activeGroup.words.length === 0 ? (
+              <div className="p-12 text-center text-gray-500 font-bold bg-white/50 rounded-xl border-2 border-dashed border-gray-300">
+                暂无数据
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {activeGroup.words.map((word, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-white border-4 border-black rounded-3xl p-6 shadow-sm hover:-translate-y-0.5 transition-transform"
+                  >
+                    <div className="flex items-center gap-4 mb-4">
+                      <div className="w-10 h-10 rounded-full bg-toon-blue border-2 border-black flex items-center justify-center font-bold text-lg">
+                        {idx + 1}
+                      </div>
+                      <h4 className="text-2xl font-black">{word.term}</h4>
+                      <button
+                        onClick={() => speak(word.term, 'en-US')}
+                        className="p-2 hover:bg-blue-100 rounded-full transition-colors text-blue-600"
+                        title="播放英语发音"
+                      >
+                        <Volume2 size={20} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 pl-14">
+                      <div className="flex items-center gap-3">
+                        <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded text-xs font-bold border border-red-200">CN</span>
+                        <span className="text-lg">{word.meaningCn}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="bg-blue-100 text-blue-600 px-2 py-0.5 rounded text-xs font-bold border border-blue-200">EN</span>
+                        <span className="text-lg italic text-gray-600">{word.meaningEn}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="bg-purple-100 text-purple-600 px-2 py-0.5 rounded text-xs font-bold border border-purple-200">JP</span>
+                        <div className="flex flex-col">
+                          <span className="text-xs text-gray-500">{word.meaningJpReading}</span>
+                          <span className="text-lg">{word.meaningJp}</span>
+                        </div>
+                        <button
+                          onClick={() => speak(word.meaningJp, 'ja-JP')}
+                          className="p-1.5 hover:bg-purple-100 rounded-full transition-colors text-purple-600"
+                          title="播放日语发音"
+                        >
+                          <Volume2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
